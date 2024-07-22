@@ -1,19 +1,19 @@
 /* email: keorapete.finger@yahoo.com
  * KVM API Documentation https://docs.kernel.org/virt/kvm/api.html 
  */
-#include <stdio.h>			/* printf */
-#include <string.h>			/* memcpy */
-#include <fcntl.h>			/* open */
-#include <unistd.h>			/* close */
+#include <stdio.h>		/* printf */
+#include <string.h>		/* memcpy */
+#include <fcntl.h>		/* open */
+#include <unistd.h>		/* close */
 #include <sys/mman.h>		/* mmap */
 #include <sys/ioctl.h>		/* ioctl calls */
 #include <linux/kvm.h>		/* KVM_GET_API_VERSION */
 
-#define TSS_ADDRESS			0xfffbd000
+#define TSS_ADDRESS		0xfffbd000
 #define VM_MEM_SIZE 		0x100000
 
-#define KVM_PERM			(O_RDWR | O_CLOEXEC)
-#define VM_MEM_PERM			(PROT_EXEC | PROT_READ | PROT_WRITE)
+#define KVM_PERM		(O_RDWR | O_CLOEXEC)
+#define VM_MEM_PERM		(PROT_EXEC | PROT_READ | PROT_WRITE)
 #define VM_MEM_MAP_PERM		(MAP_SHARED | MAP_ANONYMOUS)
 #define VCPU_MEM_PERM		(PROT_READ | PROT_WRITE, MAP_SHARED)
 #define VCPU_MEM_MAP_PERM	(MAP_SHARED)
@@ -49,8 +49,8 @@ int main()
 				.guest_phys_addr	= 0x0L,
 				.userspace_addr 	= (unsigned long) host_virt_mem,
 				.memory_size 		= VM_MEM_SIZE,
-				.slot 				= 0x0,
-				.flags 				= 0x0
+				.slot 			= 0x0,
+				.flags 			= 0x0
 		};
 
 		if (ioctl(vm_fd, KVM_SET_USER_MEMORY_REGION, &vm_mem) < 0)
@@ -66,17 +66,17 @@ int main()
 		struct kvm_run *vm_state = (struct kvm_run *) vcpu_addr;
 
 		static const char instr[] = {
-			0xfc,										// 			cld
+			0xfc,								// 			cld
 			0x8d, 0x36, 0x10, 0x00,						// 			lea si, msg
-			0xb9, 0x0d, 0x00,							// 			mov cx, len
-			0xba, 0xe9, 0x00,							// 			mov dx, 0xe9
-			0xac,										// again:	lodsb
-			0xee,										// 			out dx, al
-			0xe2, 0xfc,									// 			loop again
-			0xf4,										// 			hlt
+			0xb9, 0x0d, 0x00,						// 			mov cx, len
+			0xba, 0xe9, 0x00,						// 			mov dx, 0xe9
+			0xac,								// again:	lodsb
+			0xee,								// 			out dx, al
+			0xe2, 0xfc,							// 			loop again
+			0xf4,								// 			hlt
 			0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20,
-			0x57, 0x6f, 0x72, 0x6c, 0x64, 0x21, 0x0a	// 			msg db "Hello World!", 0x0a
-														//			len equ $-msg	
+			0x57, 0x6f, 0x72, 0x6c, 0x64, 0x21, 0x0a			// 			msg db "Hello World!", 0x0a
+											//			len equ $-msg	
 		};
 
 		memcpy((char*) host_virt_mem, instr, sizeof(instr));
@@ -87,9 +87,9 @@ int main()
 				switch(vm_state->exit_reason) {
 				case KVM_EXIT_IO: 
 						{
-								if (vm_state->io.port == 0xe9)
-                    					printf("%c", *(unsigned short*)((char*)vm_state + vm_state->io.data_offset));
-								break;
+							if (vm_state->io.port == 0xe9)
+                    						printf("%c", *(unsigned short*)((char*)vm_state + vm_state->io.data_offset));
+							break;
 						}
 				case KVM_EXIT_HLT: 
 						{
