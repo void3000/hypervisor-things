@@ -4,13 +4,14 @@
 #include <stdio.h>			/* printf */
 #include <string.h>			/* memcpy */
 #include <fcntl.h>			/* open */
+#include <sys/stat.h>			/* fstat */
 #include <unistd.h>			/* close */
 #include <sys/mman.h>			/* mmap */
 #include <sys/ioctl.h>			/* ioctl calls */
 #include <linux/kvm.h>			/* KVM_GET_API_VERSION */
 
 #define TSS_ADDRESS			0xfffbd000
-#define VM_MEM_SIZE 			0x8000
+#define VM_MEM_SIZE 			0x100000
 
 #define KVM_PERM			(O_RDWR | O_CLOEXEC)
 #define VM_MEM_PERM			(PROT_EXEC | PROT_READ | PROT_WRITE)
@@ -29,20 +30,22 @@ int main()
 	int kvm_fd = open("/dev/kvm", KVM_PERM);
 
 	int vm_fd = ioctl(kvm_fd, KVM_CREATE_VM, 0);
-
-	/* the TSS is a structure used in x86 architecture to store information
+	/* The TSS is a structure used in x86 architecture to store information
 	* about a task, such as processor registers, I/O map base address, and 
 	* stack pointers. It plays a crucial role in handling hardware task 
 	* switching and certain privileged operations.
 	*/
 	ioctl(vm_fd, KVM_SET_TSS_ADDR, TSS_ADDRESS);
-
 	/* Allocate a block of memory in the host's virtual address space for
 	 * our virtual machine (VM).
 	 */
-	void* host_virt_mem = mmap(0, VM_MEM_SIZE, VM_MEM_PERM, VM_MEM_MAP_PERM, -1, 0);
-
-	/* inside the guest OS, memory addresses used by applications 
+	void* host_virt_mem = mmap(NULL, 
+				   VM_MEM_SIZE, 
+				   VM_MEM_PERM, 
+				   VM_MEM_MAP_PERM, 
+				   -1, 
+				   0);
+	/* Inside the guest OS, memory addresses used by applications 
 	 * are guest virtual addresses (GVA). The guest OS translates 
 	 * these to guest physical addresses (GPA) using its own page 
 	 * tables. KVM maps the guest physical addresses to host 
@@ -66,27 +69,33 @@ int main()
 	}
 
 	int vcpu_fd = ioctl(vm_fd, KVM_CREATE_VCPU, 0);
-
-	/* setup protected mode by setting up Global Descriptor Table (GDT).
+	
+	struct kvm_regs vpcu_regs = {
+		.rflags = 0x02
+	};
+	
+	ioctl(vcpu_fd, KVM_SET_REGS, &vpcu_regs);
+	/* Prepare to jump to protected mode by setting up Global Descriptor
+	 * Table (GDT).
 	 * 
-	 * helpful information:
+	 * Helpful information:
 	 * - https://wiki.osdev.org/Global_Descriptor_Table
 	 * - https://wiki.osdev.org/Segment_Selector
 	 * 
-	 * protected mode allows for the following:
+	 * Protected mode allows for the following:
 	 * 	1. assess to 4 gb of RAM
 	 * 	2. protect certain memory regions
 	 * 	3. set appropriate privilage levels
 	 */
 	struct kvm_sregs vm_sregs;
 	struct kvm_segment vm_seg = {
+		.base = 0x0000,
+		.limit = 0xffff,
 		.selector = 0x00,
-		.present  = 0x01,
-		.base 	= 0x0000,
-		.limit 	= 0xffff,
-		.type 	= 0x0b,
-		.dpl 	= 0x00,
-		.db 	= 0x01,
+		.type = 0x0b,
+		.present = 0x01,
+		.dpl = 0x00,
+		.db = 0x01,
 		.s = 0x01,
 		.l = 0x00,
 		.g = 0x01
@@ -94,6 +103,7 @@ int main()
 
 	ioctl(vcpu_fd, KVM_GET_SREGS, &vm_sregs);
 
+	vm_sregs.cr0 |= CR0_PE; 
 	vm_sregs.cs = vm_seg;
 
 	vm_seg.type = 0x03;
@@ -121,37 +131,32 @@ int main()
 
 	vm_sregs.cr3 = pgd_addr;
 	vm_sregs.cr0 = (CR0_PE | CR0_PG);
-
 	ioctl(vcpu_fd, KVM_SET_SREGS, &vm_sregs);
 
-	struct kvm_regs vpcu_regs = {
-		.rflags = 0x02,
-		.rip = 0x0000
-	};
-
-	ioctl(vcpu_fd, KVM_SET_REGS, &vpcu_regs);
-
 	int vcpu_mmap_size = ioctl(kvm_fd, KVM_GET_VCPU_MMAP_SIZE, (void*) 0);
-	void* vcpu_addr = mmap(0, vcpu_mmap_size, VCPU_MEM_PERM, VCPU_MEM_MAP_PERM, vcpu_fd, 0);
-	
+	void* vcpu_addr = mmap(NULL, 
+			       vcpu_mmap_size, 
+			       VCPU_MEM_PERM, 
+			       VCPU_MEM_MAP_PERM, 
+			       vcpu_fd, 
+			       0);
 	struct kvm_run *vm_state = (struct kvm_run *) vcpu_addr;
 
-	/* 32 bit program */
-	static const char instr[] = {
-		0xfc,						// 			cld
-		0x66, 0x8d, 0x35, 0x15, 0x00, 0x00, 0x00,	// 			lea si, msg
-		0x66, 0xb9, 0x0d, 0x00,				// 			mov cx, len
-		0x66, 0xba, 0xe9, 0x00,				// 			mov dx, 0xe9
-		0xac,						// again:		lodsb
-		0xee,						// 			out dx, al
-		0xe2, 0xfc,					// 			loop again
-		0xf4,						// 			hlt
-		0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20,
-		0x57, 0x6f, 0x72, 0x6c, 0x64, 0x21, 0x0a	// 			msg db "Hello World!", 0x0a
-								//			len equ $-msg	
-	};
+	int program_fd = open("test", O_RDONLY);
 
-	memcpy((char*) host_virt_mem, instr, sizeof(instr));
+	struct stat file_stat;
+  	fstat(program_fd, &file_stat);
+
+	void* program = mmap(host_virt_mem, 
+			     file_stat.st_size, 
+			     PROT_READ, MAP_PRIVATE, 
+			     program_fd, 
+			     0);
+	close(program_fd);
+
+	memcpy((unsigned char*) host_virt_mem, 
+	       (unsigned char*) program, 
+	       file_stat.st_size);
 
 	infinite_loop() {
 		ioctl(vcpu_fd, KVM_RUN, 0);
@@ -160,7 +165,7 @@ int main()
 		case KVM_EXIT_IO: 
 			{
 				if (vm_state->io.port == 0xe9)
-                    			printf("%c", *(unsigned short*)((char*)vm_state + vm_state->io.data_offset));
+                    			printf("%c", *(char*)((char*)vm_state + vm_state->io.data_offset));
 				break;
 			}
 		case KVM_EXIT_HLT: 
@@ -169,7 +174,7 @@ int main()
 					goto exit;
 			}
 		default:
-			printf("Unknown KVM (%d) state...\n", vm_state->exit_reason);
+			printf("Unknown KVM (%d) state.\n", vm_state->exit_reason);
 			goto exit;
 		}
 	}
